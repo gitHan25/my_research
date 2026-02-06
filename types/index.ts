@@ -40,6 +40,7 @@ export type DatasetStatus = 'active' | 'completed';
 export interface Dataset {
   id: string;
   name: string;
+  description?: string;
   fileName: string;
   totalComments: number;
   labeledCount: number;
