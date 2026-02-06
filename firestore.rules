@@ -1,0 +1,91 @@
+rules_version = '2';
+
+/**
+ * Firestore Security Rules for CDSA Labeling Platform
+ * 
+ * These rules enforce:
+ * - Authentication required for all operations
+ * - Admin-only access for user management and datasets
+ * - Labelers can only manage their own annotations
+ */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Helper function to check if user owns the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own profile, admins can read all
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Only the user can update their own profile (for lastLoginAt)
+      // Admins can update any user (for role changes)
+      allow update: if isOwner(userId) || isAdmin();
+      
+      // User documents are created during sign-in
+      allow create: if isOwner(userId);
+      
+      // Only admins can delete users
+      allow delete: if isAdmin();
+    }
+    
+    // Datasets collection
+    match /datasets/{datasetId} {
+      // All authenticated users can read datasets
+      allow read: if isAuthenticated();
+      
+      // Only admins can create, update, or delete datasets
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Comments collection
+    match /comments/{commentId} {
+      // All authenticated users can read comments (for labeling)
+      allow read: if isAuthenticated();
+      
+      // Only admins can create comments (via CSV upload)
+      allow create: if isAdmin();
+      
+      // All authenticated users can update comments (for legacy single-label)
+      // In multi-annotator mode, this is not used - annotations are separate
+      allow update: if isAuthenticated();
+      
+      // Only admins can delete comments
+      allow delete: if isAdmin();
+    }
+    
+    // Annotations collection (Multi-Annotator Support)
+    match /annotations/{annotationId} {
+      // All authenticated users can read annotations
+      // (needed for export and progress tracking)
+      allow read: if isAuthenticated();
+      
+      // Users can only create annotations for themselves
+      allow create: if isAuthenticated() && 
+        request.resource.data.userId == request.auth.uid;
+      
+      // Users can only update their own annotations
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      
+      // Users can only delete their own annotations (for undo)
+      // Admins can delete any annotation
+      allow delete: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+    }
+  }
+}
