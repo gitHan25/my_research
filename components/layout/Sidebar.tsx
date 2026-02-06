@@ -12,6 +12,7 @@ import {
   Download,
   Tag,
   CheckCircle,
+  Database,
 } from 'lucide-react';
 
 interface NavItem {
@@ -49,6 +50,12 @@ const adminItems: NavItem[] = [
     label: 'Upload CSV',
     href: '/admin/upload',
     icon: <Upload className="h-5 w-5" />,
+    adminOnly: true,
+  },
+  {
+    label: 'Datasets',
+    href: '/admin/datasets',
+    icon: <Database className="h-5 w-5" />,
     adminOnly: true,
   },
   {

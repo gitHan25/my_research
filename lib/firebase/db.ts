@@ -137,7 +137,7 @@ export async function updateDatasetStatus(
 }
 
 /**
- * Delete dataset and all its comments
+ * Delete dataset, all its comments, and all annotations
  */
 export async function deleteDataset(datasetId: string): Promise<void> {
   // Delete all comments in the dataset
@@ -147,15 +147,38 @@ export async function deleteDataset(datasetId: string): Promise<void> {
   );
   const commentsSnapshot = await getDocs(commentsQuery);
   
-  const batch = writeBatch(db);
-  commentsSnapshot.docs.forEach((doc) => {
-    batch.delete(doc.ref);
-  });
+  // Delete all annotations for this dataset
+  const annotationsQuery = query(
+    collection(db, COLLECTIONS.ANNOTATIONS),
+    where('datasetId', '==', datasetId)
+  );
+  const annotationsSnapshot = await getDocs(annotationsQuery);
   
-  // Delete the dataset
-  batch.delete(doc(db, COLLECTIONS.DATASETS, datasetId));
+  // Use multiple batches if needed (max 500 operations per batch)
+  const BATCH_SIZE = 500;
+  const allDocs = [...commentsSnapshot.docs, ...annotationsSnapshot.docs];
   
-  await batch.commit();
+  for (let i = 0; i < allDocs.length; i += BATCH_SIZE) {
+    const batch = writeBatch(db);
+    const chunk = allDocs.slice(i, i + BATCH_SIZE);
+    chunk.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  }
+  
+  // Delete the dataset itself
+  await deleteDoc(doc(db, COLLECTIONS.DATASETS, datasetId));
+}
+
+/**
+ * Update dataset metadata (name, description)
+ */
+export async function updateDataset(
+  datasetId: string,
+  data: { name?: string; description?: string }
+): Promise<void> {
+  await updateDoc(doc(db, COLLECTIONS.DATASETS, datasetId), data);
 }
 
 // ============================================
