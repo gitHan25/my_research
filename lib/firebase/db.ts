@@ -180,20 +180,47 @@ export async function updateDataset(
 }
 
 /**
- * Count the actual comments in Firestore for a dataset and update totalComments.
- * Use this to repair a dataset whose totalComments was saved incorrectly on upload.
+ * Sync totalComments and labeledCount from actual Firestore data.
+ * totalComments = number of comment documents for this dataset.
+ * labeledCount  = number of distinct comments that have at least one annotation.
  */
-export async function syncDatasetCommentCount(datasetId: string): Promise<number> {
+export async function syncDatasetStats(
+  datasetId: string
+): Promise<{ totalComments: number; labeledCount: number }> {
+  const [commentsSnap, annotationsSnap] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.COMMENTS), where('datasetId', '==', datasetId))),
+    getDocs(query(collection(db, COLLECTIONS.ANNOTATIONS), where('datasetId', '==', datasetId))),
+  ]);
+
+  const totalComments = commentsSnap.size;
+  const labeledCommentIds = new Set(
+    annotationsSnap.docs.map((d) => d.data().commentId as string)
+  );
+  const labeledCount = labeledCommentIds.size;
+
+  await updateDoc(doc(db, COLLECTIONS.DATASETS, datasetId), { totalComments, labeledCount });
+
+  return { totalComments, labeledCount };
+}
+
+// Keep old name as alias so nothing else breaks
+export const syncDatasetCommentCount = async (datasetId: string) =>
+  (await syncDatasetStats(datasetId)).totalComments;
+
+/**
+ * Get the highest comment index stored in Firestore for a dataset.
+ * Returns -1 if no comments exist yet.
+ */
+export async function getMaxCommentIndex(datasetId: string): Promise<number> {
   const q = query(
     collection(db, COLLECTIONS.COMMENTS),
-    where('datasetId', '==', datasetId)
+    where('datasetId', '==', datasetId),
+    orderBy('index', 'desc'),
+    limit(1)
   );
-  const snapshot = await getDocs(q);
-  const actualCount = snapshot.size;
-  await updateDoc(doc(db, COLLECTIONS.DATASETS, datasetId), {
-    totalComments: actualCount,
-  });
-  return actualCount;
+  const snap = await getDocs(q);
+  if (snap.empty) return -1;
+  return (snap.docs[0].data().index as number) ?? -1;
 }
 
 // ============================================
