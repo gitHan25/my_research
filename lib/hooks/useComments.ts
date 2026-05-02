@@ -8,7 +8,6 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { DocumentSnapshot } from 'firebase/firestore';
 import {
   getCommentsPaginated,
   getCommentByIndex,
@@ -61,7 +60,7 @@ export function useComments(datasetId: string | null): UseCommentsReturn {
   
   // Pagination
   const [hasMore, setHasMore] = useState(false);
-  const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
+  const [nextPage, setNextPage] = useState(2);
 
   /**
    * Fetch initial comments and progress
@@ -83,7 +82,7 @@ export function useComments(datasetId: string | null): UseCommentsReturn {
 
       setComments(commentsResult.data);
       setHasMore(commentsResult.hasMore);
-      setLastDoc(commentsResult.lastDoc as DocumentSnapshot | null);
+      setNextPage(2);
       setProgress(progressResult);
       
       // Set current comment if we have data
@@ -110,23 +109,19 @@ export function useComments(datasetId: string | null): UseCommentsReturn {
     if (!datasetId || !hasMore || isLoadingMore) return;
 
     setIsLoadingMore(true);
-    
+
     try {
-      const result = await getCommentsPaginated(
-        datasetId,
-        PAGE_SIZE,
-        lastDoc || undefined
-      );
+      const result = await getCommentsPaginated(datasetId, PAGE_SIZE, nextPage);
 
       setComments((prev) => [...prev, ...result.data]);
       setHasMore(result.hasMore);
-      setLastDoc(result.lastDoc as DocumentSnapshot | null);
+      setNextPage((p) => p + 1);
     } catch (error) {
       console.error('Error loading more comments:', error);
     } finally {
       setIsLoadingMore(false);
     }
-  }, [datasetId, hasMore, isLoadingMore, lastDoc]);
+  }, [datasetId, hasMore, isLoadingMore, nextPage]);
 
   /**
    * Go to specific comment by index (for card view)
