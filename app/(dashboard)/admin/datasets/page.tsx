@@ -37,7 +37,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useAuthContext } from '@/providers';
-import { getDatasets, deleteDataset, updateDataset, syncDatasetStats, getMaxCommentIndex, addCommentsFromCSV, getAllUsers } from '@/lib/firebase/db';
+import { getDatasets, deleteDataset, updateDataset, syncDatasetStats, addCommentsFromCSV, getAllUsers } from '@/lib/firebase/db';
 import Papa from 'papaparse';
 import { Dataset, User } from '@/types';
 import { toast } from 'sonner';
@@ -164,8 +164,23 @@ export default function DatasetsPage() {
     }
   };
 
-  // Append missing comments from a CSV (picks up from max existing index + 1)
+  // Append missing comments from a CSV starting at dataset.totalComments (the confirmed actual count)
   const handleAppendCSV = (dataset: Dataset) => {
+    // Ask the user to confirm the start index — defaults to the current totalComments
+    // (run the wrench sync first if totalComments looks wrong)
+    const answer = window.prompt(
+      `Append will start from CSV row index:\n\n` +
+      `Default = ${dataset.totalComments} (current synced total).\n` +
+      `Run the Sync (wrench) button first if this looks wrong.`,
+      String(dataset.totalComments)
+    );
+    if (answer === null) return; // cancelled
+    const startFrom = parseInt(answer, 10);
+    if (isNaN(startFrom) || startFrom < 0) {
+      toast.error('Invalid start index');
+      return;
+    }
+
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.csv';
@@ -175,13 +190,6 @@ export default function DatasetsPage() {
 
       setIsAppending(dataset.id);
       try {
-        const maxIndex = await getMaxCommentIndex(dataset.id);
-        const startFrom = maxIndex + 1;
-
-        if (startFrom === 0) {
-          toast.error('No existing comments found. Use Upload instead.');
-          return;
-        }
 
         const parsed = await new Promise<Papa.ParseResult<Record<string, string>>>(
           (resolve, reject) => {

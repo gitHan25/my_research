@@ -21,7 +21,6 @@ import {
   serverTimestamp,
   writeBatch,
   increment,
-  getCountFromServer,
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from './config';
@@ -208,21 +207,6 @@ export async function syncDatasetStats(
 export const syncDatasetCommentCount = async (datasetId: string) =>
   (await syncDatasetStats(datasetId)).totalComments;
 
-/**
- * Get the highest comment index stored in Firestore for a dataset.
- * Uses getCountFromServer (no composite index needed) since indices are
- * sequential 0-based, so maxIndex = count - 1.
- * Returns -1 if no comments exist yet.
- */
-export async function getMaxCommentIndex(datasetId: string): Promise<number> {
-  const q = query(
-    collection(db, COLLECTIONS.COMMENTS),
-    where('datasetId', '==', datasetId)
-  );
-  const snap = await getCountFromServer(q);
-  const count = snap.data().count;
-  return count > 0 ? count - 1 : -1;
-}
 
 // ============================================
 // Comment Operations
