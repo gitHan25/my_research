@@ -18,11 +18,9 @@ import {
   where,
   orderBy,
   limit,
-  startAfter,
   serverTimestamp,
   writeBatch,
   increment,
-  DocumentSnapshot,
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from './config';
@@ -181,6 +179,23 @@ export async function updateDataset(
   await updateDoc(doc(db, COLLECTIONS.DATASETS, datasetId), data);
 }
 
+/**
+ * Count the actual comments in Firestore for a dataset and update totalComments.
+ * Use this to repair a dataset whose totalComments was saved incorrectly on upload.
+ */
+export async function syncDatasetCommentCount(datasetId: string): Promise<number> {
+  const q = query(
+    collection(db, COLLECTIONS.COMMENTS),
+    where('datasetId', '==', datasetId)
+  );
+  const snapshot = await getDocs(q);
+  const actualCount = snapshot.size;
+  await updateDoc(doc(db, COLLECTIONS.DATASETS, datasetId), {
+    totalComments: actualCount,
+  });
+  return actualCount;
+}
+
 // ============================================
 // Comment Operations
 // ============================================
@@ -215,38 +230,38 @@ export async function addCommentsFromCSV(
 }
 
 /**
- * Get comments with pagination
+ * Get comments with pagination using index-based page offsets.
+ * Uses where('index', '>=', startIndex) instead of cursor snapshots to avoid
+ * the null-cursor restart bug that occurred when a page returned 0 results.
  */
 export async function getCommentsPaginated(
   datasetId: string,
   pageSize: number = 20,
-  lastDoc?: DocumentSnapshot
+  pageNumber: number = 1
 ): Promise<PaginatedResponse<Comment>> {
-  let q = query(
+  const startIndex = (pageNumber - 1) * pageSize;
+
+  const q = query(
     collection(db, COLLECTIONS.COMMENTS),
     where('datasetId', '==', datasetId),
+    where('index', '>=', startIndex),
     orderBy('index', 'asc'),
-    limit(pageSize + 1) // Fetch one extra to check if there are more
+    limit(pageSize + 1)
   );
-  
-  if (lastDoc) {
-    q = query(q, startAfter(lastDoc));
-  }
-  
+
   const snapshot = await getDocs(q);
   const docs = snapshot.docs;
   const hasMore = docs.length > pageSize;
-  
-  // Remove the extra document if exists
+
   const data = (hasMore ? docs.slice(0, -1) : docs).map((doc) => ({
     id: doc.id,
     ...doc.data(),
   })) as Comment[];
-  
+
   return {
     data,
     hasMore,
-    lastDoc: data.length > 0 ? docs[data.length - 1] : null,
+    lastDoc: null,
     total: data.length,
   };
 }
