@@ -145,21 +145,11 @@ export default function UploadPage() {
     setProgress(0);
     
     try {
-      // Create dataset
-      const datasetId = await createDataset({
-        name: datasetName.trim(),
-        fileName,
-        totalComments: parsedData.length,
-        createdBy: user.id,
-      });
-      
-      setProgress(10);
-      
-      // Prepare comments data
+      // Prepare comments data first to get the accurate count after filtering empty rows
       const comments: CommentCreateData[] = parsedData
         .filter((row) => row.text && row.text.trim() !== '')
         .map((row, index) => ({
-          datasetId,
+          datasetId: '',   // placeholder; replaced after createDataset
           index,
           text: row.text.trim(),
           videoId: row.videoId || '',
@@ -168,6 +158,19 @@ export default function UploadPage() {
           originalLikes: row.originalLikes || 0,
           llmLabel: row.llmLabel as 'positive' | 'negative' | 'neutral' | undefined,
         }));
+
+      // Create dataset using the actual filtered count so totalComments matches Firestore
+      const datasetId = await createDataset({
+        name: datasetName.trim(),
+        fileName,
+        totalComments: comments.length,
+        createdBy: user.id,
+      });
+
+      // Patch the placeholder datasetId now that we have the real one
+      comments.forEach((c) => { c.datasetId = datasetId; });
+
+      setProgress(10);
       
       // Save comments in batches (progress updates)
       const batchSize = 500;

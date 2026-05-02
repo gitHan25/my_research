@@ -12,6 +12,7 @@ import {
   Users,
   MessageSquare,
   X,
+  Wrench,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,7 +36,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useAuthContext } from '@/providers';
-import { getDatasets, deleteDataset, updateDataset, getAllUsers } from '@/lib/firebase/db';
+import { getDatasets, deleteDataset, updateDataset, syncDatasetCommentCount, getAllUsers } from '@/lib/firebase/db';
 import { Dataset, User } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -48,6 +49,7 @@ export default function DatasetsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState<string | null>(null);
   
   // Edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -135,6 +137,23 @@ export default function DatasetsPage() {
       toast.error('Failed to delete dataset');
     } finally {
       setIsDeleting(null);
+    }
+  };
+
+  // Handle sync comment count
+  const handleSyncCount = async (dataset: Dataset) => {
+    setIsSyncing(dataset.id);
+    try {
+      const actualCount = await syncDatasetCommentCount(dataset.id);
+      setDatasets((prev) =>
+        prev.map((d) => d.id === dataset.id ? { ...d, totalComments: actualCount } : d)
+      );
+      toast.success(`Count fixed: ${actualCount.toLocaleString()} comments`);
+    } catch (error) {
+      console.error('Error syncing count:', error);
+      toast.error('Failed to sync comment count');
+    } finally {
+      setIsSyncing(null);
     }
   };
 
@@ -323,8 +342,23 @@ export default function DatasetsPage() {
                             size="sm"
                             onClick={() => openEditModal(dataset)}
                             className="h-8 w-8 p-0 text-zinc-400 hover:text-zinc-100"
+                            title="Edit dataset"
                           >
                             <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleSyncCount(dataset)}
+                            disabled={isSyncing === dataset.id}
+                            className="h-8 w-8 p-0 text-zinc-400 hover:text-amber-400"
+                            title="Fix comment count (sync with actual Firestore data)"
+                          >
+                            {isSyncing === dataset.id ? (
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Wrench className="h-4 w-4" />
+                            )}
                           </Button>
                           <Button
                             variant="ghost"
@@ -332,6 +366,7 @@ export default function DatasetsPage() {
                             onClick={() => openDeleteModal(dataset)}
                             disabled={isDeleting === dataset.id}
                             className="h-8 w-8 p-0 text-zinc-400 hover:text-red-400"
+                            title="Delete dataset"
                           >
                             {isDeleting === dataset.id ? (
                               <RefreshCw className="h-4 w-4 animate-spin" />

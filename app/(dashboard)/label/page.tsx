@@ -12,7 +12,6 @@ import { getCommentsPaginated, getDatasets } from '@/lib/firebase/db';
 import { Comment, Dataset, SentimentLabel, CommentWithUserLabel } from '@/types';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { DocumentSnapshot } from 'firebase/firestore';
 
 const PAGE_SIZE = 20;
 
@@ -32,7 +31,6 @@ export default function LabelingPage() {
   
   // Cache for paginated data - stores comments by page number
   const pageCache = useRef<Map<number, Comment[]>>(new Map());
-  const lastDocCache = useRef<Map<number, DocumentSnapshot | null>>(new Map());
   
   // Multi-annotator hook - each user has their own annotations
   const {
@@ -86,72 +84,36 @@ export default function LabelingPage() {
   useEffect(() => {
     if (selectedDataset) {
       pageCache.current.clear();
-      lastDocCache.current.clear();
       setCurrentPage(1);
       setCurrentIndex(0);
       setError(null);
     }
   }, [selectedDataset?.id]);
 
-  // Load comments
+  // Load comments for the current page using index-based pagination
   const loadComments = useCallback(async () => {
     if (!selectedDataset) return;
-    
-    // Check cache first
-    const cachedComments = pageCache.current.get(currentPage);
-    if (cachedComments) {
-      setComments(cachedComments);
+
+    const cached = pageCache.current.get(currentPage);
+    if (cached) {
+      setComments(cached);
       return;
     }
 
     setIsLoading(true);
     setError(null);
     try {
-      // For cursor-based pagination, we need to load all previous pages if not cached
-      let startPage = 1;
-      for (let i = currentPage - 1; i >= 1; i--) {
-        if (lastDocCache.current.has(i)) {
-          startPage = i + 1;
-          break;
-        }
-      }
+      const result = await getCommentsPaginated(selectedDataset.id, PAGE_SIZE, currentPage);
 
-      if (startPage < currentPage) {
-        toast.loading(`Loading pages ${startPage}-${currentPage}...`, { id: 'page-load' });
-      }
-
-      // Sequentially load all pages from startPage to currentPage
-      for (let page = startPage; page <= currentPage; page++) {
-        if (pageCache.current.has(page)) continue;
-
-        const lastDoc = page > 1 ? lastDocCache.current.get(page - 1) : undefined;
-        
-        const result = await getCommentsPaginated(
-          selectedDataset.id, 
-          PAGE_SIZE, 
-          lastDoc as DocumentSnapshot | undefined
-        );
-        
-        // Store in cache
-        pageCache.current.set(page, result.data);
-        lastDocCache.current.set(page, result.lastDoc as DocumentSnapshot | null);
-        
-        // Update UI only for the target page
-        if (page === currentPage) {
-          setComments(result.data);
-        }
-      }
-
-      toast.dismiss('page-load');
+      pageCache.current.set(currentPage, result.data);
+      setComments(result.data);
       setTotalComments(selectedDataset.totalComments);
-      
-      // Reset card view index when page changes
+
       if (viewMode === 'card') {
         setCurrentIndex(0);
       }
     } catch (error) {
       console.error('Error loading comments:', error);
-      toast.dismiss('page-load');
       toast.error('Failed to load comments');
       setError('Failed to load comments. Please try again.');
     } finally {
