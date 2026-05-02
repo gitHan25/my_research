@@ -13,6 +13,7 @@ import {
   MessageSquare,
   X,
   Wrench,
+  FilePlus,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,7 +37,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useAuthContext } from '@/providers';
-import { getDatasets, deleteDataset, updateDataset, syncDatasetCommentCount, getAllUsers } from '@/lib/firebase/db';
+import { getDatasets, deleteDataset, updateDataset, syncDatasetStats, getMaxCommentIndex, addCommentsFromCSV, getAllUsers } from '@/lib/firebase/db';
+import Papa from 'papaparse';
 import { Dataset, User } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -50,6 +52,7 @@ export default function DatasetsPage() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState<string | null>(null);
+  const [isAppending, setIsAppending] = useState<string | null>(null);
   
   // Edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -140,21 +143,118 @@ export default function DatasetsPage() {
     }
   };
 
-  // Handle sync comment count
+  // Handle sync stats (totalComments + labeledCount from real Firestore data)
   const handleSyncCount = async (dataset: Dataset) => {
     setIsSyncing(dataset.id);
     try {
-      const actualCount = await syncDatasetCommentCount(dataset.id);
+      const { totalComments, labeledCount } = await syncDatasetStats(dataset.id);
       setDatasets((prev) =>
-        prev.map((d) => d.id === dataset.id ? { ...d, totalComments: actualCount } : d)
+        prev.map((d) =>
+          d.id === dataset.id ? { ...d, totalComments, labeledCount } : d
+        )
       );
-      toast.success(`Count fixed: ${actualCount.toLocaleString()} comments`);
+      toast.success(
+        `Synced: ${totalComments.toLocaleString()} comments, ${labeledCount.toLocaleString()} labeled`
+      );
     } catch (error) {
-      console.error('Error syncing count:', error);
-      toast.error('Failed to sync comment count');
+      console.error('Error syncing stats:', error);
+      toast.error('Failed to sync dataset stats');
     } finally {
       setIsSyncing(null);
     }
+  };
+
+  // Append missing comments from a CSV (picks up from max existing index + 1)
+  const handleAppendCSV = (dataset: Dataset) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      setIsAppending(dataset.id);
+      try {
+        const maxIndex = await getMaxCommentIndex(dataset.id);
+        const startFrom = maxIndex + 1;
+
+        if (startFrom === 0) {
+          toast.error('No existing comments found. Use Upload instead.');
+          return;
+        }
+
+        const parsed = await new Promise<Papa.ParseResult<Record<string, string>>>(
+          (resolve, reject) => {
+            Papa.parse<Record<string, string>>(file, {
+              header: true,
+              skipEmptyLines: true,
+              complete: resolve,
+              error: reject,
+            });
+          }
+        );
+
+        const allRows = parsed.data;
+        const missingRows = allRows.slice(startFrom);
+
+        if (missingRows.length === 0) {
+          toast.info('No missing rows found — dataset is already complete.');
+          return;
+        }
+
+        const COLUMN_MAP: Record<string, string> = {
+          text: 'text', comment: 'text', comment_text: 'text', content: 'text',
+          video_id: 'videoId', videoId: 'videoId',
+          video_title: 'videoTitle', videoTitle: 'videoTitle', title: 'videoTitle',
+          channel_name: 'channelName', channelName: 'channelName', channel: 'channelName',
+          likes: 'originalLikes', like_count: 'originalLikes', originalLikes: 'originalLikes',
+          llm_label: 'llmLabel', llmLabel: 'llmLabel', label: 'llmLabel',
+        };
+
+        const comments = missingRows
+          .map((row, i) => {
+            const mapped: Record<string, unknown> = {};
+            for (const [col, val] of Object.entries(row)) {
+              const key = COLUMN_MAP[col.toLowerCase()] || COLUMN_MAP[col];
+              if (key) mapped[key] = key === 'originalLikes' ? parseInt(val) || 0 : val;
+            }
+            return {
+              datasetId: dataset.id,
+              index: startFrom + i,
+              text: (mapped.text as string)?.trim() || '',
+              videoId: (mapped.videoId as string) || '',
+              videoTitle: (mapped.videoTitle as string) || '',
+              channelName: (mapped.channelName as string) || '',
+              originalLikes: (mapped.originalLikes as number) || 0,
+              llmLabel: mapped.llmLabel as 'positive' | 'negative' | 'neutral' | undefined,
+            };
+          })
+          .filter((c) => c.text !== '');
+
+        const BATCH = 500;
+        for (let i = 0; i < comments.length; i += BATCH) {
+          await addCommentsFromCSV(dataset.id, comments.slice(i, i + BATCH));
+        }
+
+        // Sync stats after appending
+        const { totalComments, labeledCount } = await syncDatasetStats(dataset.id);
+        setDatasets((prev) =>
+          prev.map((d) =>
+            d.id === dataset.id ? { ...d, totalComments, labeledCount } : d
+          )
+        );
+
+        toast.success(
+          `Appended ${comments.length.toLocaleString()} comments (indices ${startFrom}–${startFrom + comments.length - 1})`
+        );
+      } catch (error) {
+        console.error('Error appending comments:', error);
+        toast.error('Failed to append comments');
+      } finally {
+        setIsAppending(null);
+      }
+    };
+    input.click();
   };
 
   // Format date
@@ -352,12 +452,26 @@ export default function DatasetsPage() {
                             onClick={() => handleSyncCount(dataset)}
                             disabled={isSyncing === dataset.id}
                             className="h-8 w-8 p-0 text-zinc-400 hover:text-amber-400"
-                            title="Fix comment count (sync with actual Firestore data)"
+                            title="Sync stats: fix totalComments and labeledCount from Firestore"
                           >
                             {isSyncing === dataset.id ? (
                               <RefreshCw className="h-4 w-4 animate-spin" />
                             ) : (
                               <Wrench className="h-4 w-4" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleAppendCSV(dataset)}
+                            disabled={isAppending === dataset.id}
+                            className="h-8 w-8 p-0 text-zinc-400 hover:text-green-400"
+                            title="Append missing rows from CSV (resumes from last uploaded index)"
+                          >
+                            {isAppending === dataset.id ? (
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <FilePlus className="h-4 w-4" />
                             )}
                           </Button>
                           <Button
