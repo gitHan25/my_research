@@ -64,6 +64,12 @@ export default function DatasetsPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Dataset | null>(null);
 
+  // Append modal state
+  const [appendModalOpen, setAppendModalOpen] = useState(false);
+  const [appendTarget, setAppendTarget] = useState<Dataset | null>(null);
+  const [appendStartIndex, setAppendStartIndex] = useState('');
+  const [appendFile, setAppendFile] = useState<File | null>(null);
+
   // Load datasets and users
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -164,105 +170,94 @@ export default function DatasetsPage() {
     }
   };
 
-  // Append missing comments from a CSV starting at dataset.totalComments (the confirmed actual count)
+  // Open the append dialog
   const handleAppendCSV = (dataset: Dataset) => {
-    // Ask the user to confirm the start index — defaults to the current totalComments
-    // (run the wrench sync first if totalComments looks wrong)
-    const answer = window.prompt(
-      `Append will start from CSV row index:\n\n` +
-      `Default = ${dataset.totalComments} (current synced total).\n` +
-      `Run the Sync (wrench) button first if this looks wrong.`,
-      String(dataset.totalComments)
-    );
-    if (answer === null) return; // cancelled
-    const startFrom = parseInt(answer, 10);
+    setAppendTarget(dataset);
+    setAppendStartIndex(String(dataset.totalComments));
+    setAppendFile(null);
+    setAppendModalOpen(true);
+  };
+
+  // Run the actual append after the user confirms in the dialog
+  const handleAppendSubmit = async () => {
+    if (!appendTarget || !appendFile) return;
+    const startFrom = parseInt(appendStartIndex, 10);
     if (isNaN(startFrom) || startFrom < 0) {
       toast.error('Invalid start index');
       return;
     }
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-
-      setIsAppending(dataset.id);
-      try {
-
-        const parsed = await new Promise<Papa.ParseResult<Record<string, string>>>(
-          (resolve, reject) => {
-            Papa.parse<Record<string, string>>(file, {
-              header: true,
-              skipEmptyLines: true,
-              complete: resolve,
-              error: reject,
-            });
-          }
-        );
-
-        const allRows = parsed.data;
-        const missingRows = allRows.slice(startFrom);
-
-        if (missingRows.length === 0) {
-          toast.info('No missing rows found — dataset is already complete.');
-          return;
+    setIsAppending(appendTarget.id);
+    setAppendModalOpen(false);
+    try {
+      const parsed = await new Promise<Papa.ParseResult<Record<string, string>>>(
+        (resolve, reject) => {
+          Papa.parse<Record<string, string>>(appendFile, {
+            header: true,
+            skipEmptyLines: true,
+            complete: resolve,
+            error: reject,
+          });
         }
+      );
 
-        const COLUMN_MAP: Record<string, string> = {
-          text: 'text', comment: 'text', comment_text: 'text', content: 'text',
-          video_id: 'videoId', videoId: 'videoId',
-          video_title: 'videoTitle', videoTitle: 'videoTitle', title: 'videoTitle',
-          channel_name: 'channelName', channelName: 'channelName', channel: 'channelName',
-          likes: 'originalLikes', like_count: 'originalLikes', originalLikes: 'originalLikes',
-          llm_label: 'llmLabel', llmLabel: 'llmLabel', label: 'llmLabel',
-        };
-
-        const comments = missingRows
-          .map((row, i) => {
-            const mapped: Record<string, unknown> = {};
-            for (const [col, val] of Object.entries(row)) {
-              const key = COLUMN_MAP[col.toLowerCase()] || COLUMN_MAP[col];
-              if (key) mapped[key] = key === 'originalLikes' ? parseInt(val) || 0 : val;
-            }
-            return {
-              datasetId: dataset.id,
-              index: startFrom + i,
-              text: (mapped.text as string)?.trim() || '',
-              videoId: (mapped.videoId as string) || '',
-              videoTitle: (mapped.videoTitle as string) || '',
-              channelName: (mapped.channelName as string) || '',
-              originalLikes: (mapped.originalLikes as number) || 0,
-              llmLabel: mapped.llmLabel as 'positive' | 'negative' | 'neutral' | undefined,
-            };
-          })
-          .filter((c) => c.text !== '');
-
-        const BATCH = 500;
-        for (let i = 0; i < comments.length; i += BATCH) {
-          await addCommentsFromCSV(dataset.id, comments.slice(i, i + BATCH));
-        }
-
-        // Sync stats after appending
-        const { totalComments, labeledCount } = await syncDatasetStats(dataset.id);
-        setDatasets((prev) =>
-          prev.map((d) =>
-            d.id === dataset.id ? { ...d, totalComments, labeledCount } : d
-          )
-        );
-
-        toast.success(
-          `Appended ${comments.length.toLocaleString()} comments (indices ${startFrom}–${startFrom + comments.length - 1})`
-        );
-      } catch (error) {
-        console.error('Error appending comments:', error);
-        toast.error('Failed to append comments');
-      } finally {
-        setIsAppending(null);
+      const missingRows = parsed.data.slice(startFrom);
+      if (missingRows.length === 0) {
+        toast.info('No missing rows found — dataset is already complete.');
+        return;
       }
-    };
-    input.click();
+
+      const COLUMN_MAP: Record<string, string> = {
+        text: 'text', comment: 'text', comment_text: 'text', content: 'text',
+        video_id: 'videoId', videoId: 'videoId',
+        video_title: 'videoTitle', videoTitle: 'videoTitle', title: 'videoTitle',
+        channel_name: 'channelName', channelName: 'channelName', channel: 'channelName',
+        likes: 'originalLikes', like_count: 'originalLikes', originalLikes: 'originalLikes',
+        llm_label: 'llmLabel', llmLabel: 'llmLabel', label: 'llmLabel',
+      };
+
+      const comments = missingRows
+        .map((row, i) => {
+          const mapped: Record<string, unknown> = {};
+          for (const [col, val] of Object.entries(row)) {
+            const key = COLUMN_MAP[col.toLowerCase()] || COLUMN_MAP[col];
+            if (key) mapped[key] = key === 'originalLikes' ? parseInt(val) || 0 : val;
+          }
+          return {
+            datasetId: appendTarget.id,
+            index: startFrom + i,
+            text: (mapped.text as string)?.trim() || '',
+            videoId: (mapped.videoId as string) || '',
+            videoTitle: (mapped.videoTitle as string) || '',
+            channelName: (mapped.channelName as string) || '',
+            originalLikes: (mapped.originalLikes as number) || 0,
+            llmLabel: mapped.llmLabel as 'positive' | 'negative' | 'neutral' | undefined,
+          };
+        })
+        .filter((c) => c.text !== '');
+
+      const BATCH = 500;
+      for (let i = 0; i < comments.length; i += BATCH) {
+        await addCommentsFromCSV(appendTarget.id, comments.slice(i, i + BATCH));
+      }
+
+      // Update local state — click the sync (wrench) button to persist to Firestore
+      const newTotal = startFrom + comments.length;
+      setDatasets((prev) =>
+        prev.map((d) =>
+          d.id === appendTarget.id ? { ...d, totalComments: newTotal } : d
+        )
+      );
+
+      toast.success(
+        `Appended ${comments.length.toLocaleString()} comments (rows ${startFrom}–${startFrom + comments.length - 1})`
+      );
+    } catch (error) {
+      console.error('Error appending comments:', error);
+      toast.error('Failed to append comments');
+    } finally {
+      setIsAppending(null);
+    }
   };
 
   // Format date
@@ -551,6 +546,68 @@ export default function DatasetsPage() {
               className="bg-blue-600 hover:bg-blue-500"
             >
               {isEditing ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Append CSV Modal */}
+      <Dialog open={appendModalOpen} onOpenChange={setAppendModalOpen}>
+        <DialogContent className="border-zinc-800 bg-zinc-900">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-zinc-100">
+              <FilePlus className="h-5 w-5 text-green-400" />
+              Append Missing Comments
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Uploads only the rows after the start index — existing comments and labels are untouched.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Start from CSV row index</Label>
+              <Input
+                type="number"
+                min={0}
+                value={appendStartIndex}
+                onChange={(e) => setAppendStartIndex(e.target.value)}
+                className="border-zinc-700 bg-zinc-800/50 text-zinc-100"
+              />
+              <p className="text-xs text-zinc-500">
+                Default is the current synced total ({appendTarget?.totalComments.toLocaleString()}).
+                Run the Sync (wrench) button first if this looks wrong.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-zinc-300">CSV file</Label>
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-800/30 p-4 hover:border-zinc-500 transition-colors">
+                <FilePlus className="h-5 w-5 text-zinc-400 shrink-0" />
+                <span className="text-sm text-zinc-400 truncate">
+                  {appendFile ? appendFile.name : 'Click to choose CSV file…'}
+                </span>
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => setAppendFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAppendModalOpen(false)}
+              className="border-zinc-700 bg-zinc-800/50"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAppendSubmit}
+              disabled={!appendFile || appendStartIndex === ''}
+              className="bg-green-600 hover:bg-green-500"
+            >
+              Append Comments
             </Button>
           </DialogFooter>
         </DialogContent>
